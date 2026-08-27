@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Plus, Edit2, Trash2, ChevronDown, ChevronRight, Package, Upload,
-  Tag, Search, RefreshCw, AlertTriangle, BarChart2
+  Tag, Search, RefreshCw, AlertTriangle, BarChart2, RotateCcw
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { productService } from '../services/api';
@@ -63,16 +63,19 @@ function ProductsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [expandedProducts, setExpandedProducts] = useState({});
+  const [showInactive, setShowInactive] = useState(false);
 
   // Modals
   const [showProductModal, setShowProductModal] = useState(false);
   const [showVariantModal, setShowVariantModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showDeleteVariantConfirm, setShowDeleteVariantConfirm] = useState(false);
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [editingVariant, setEditingVariant] = useState(null);
   const [targetProductId, setTargetProductId] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteVariantTarget, setDeleteVariantTarget] = useState(null);
 
   // Forms
   const [productForm, setProductForm] = useState(emptyProduct);
@@ -88,7 +91,10 @@ function ProductsPage() {
     try {
       const params = {};
       if (searchQuery) params.search = searchQuery;
-      if (selectedCategory !== 'all') params.category = selectedCategory;
+      // was `category` — the backend reads `category_id`, so this filter
+      // silently did nothing before
+      if (selectedCategory !== 'all') params.category_id = selectedCategory;
+      if (showInactive) params.include_inactive = true;
       const res = await productService.getProducts(params);
       setProducts(Array.isArray(res?.data?.products) ? res.data.products : []);
     } catch {
@@ -96,7 +102,7 @@ function ProductsPage() {
     } finally {
       setLoading(false);
     }
-  }, [searchQuery, selectedCategory]);
+  }, [searchQuery, selectedCategory, showInactive]);
 
   const fetchCategories = useCallback(async () => {
     try {
@@ -177,13 +183,33 @@ function ProductsPage() {
     setSaving(true);
     try {
       await productService.deleteProduct(deleteTarget.id);
-      toast.success('Product deleted');
+      toast.success('Product deactivated — hidden from POS and the store, but recoverable');
       setShowDeleteConfirm(false);
       fetchProducts();
     } catch (err) {
       toast.error(err.message || 'Failed to delete product');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleReactivateProduct = async (product) => {
+    try {
+      await productService.updateProduct(product.id, { is_active: true });
+      toast.success(`${product.name} reactivated`);
+      fetchProducts();
+    } catch (err) {
+      toast.error(err.message || 'Failed to reactivate product');
+    }
+  };
+
+  const handleReactivateVariant = async (productId, variant) => {
+    try {
+      await productService.updateVariant(productId, variant.id, { is_active: true });
+      toast.success(`${variant.sku || 'Variant'} reactivated`);
+      fetchProducts();
+    } catch (err) {
+      toast.error(err.message || 'Failed to reactivate variant');
     }
   };
 
@@ -233,14 +259,23 @@ function ProductsPage() {
     }
   };
 
-  const handleDeleteVariant = async (productId, variantId) => {
-    if (!window.confirm('Delete this variant?')) return;
+  const openDeleteVariantConfirm = (productId, variant) => {
+    setDeleteVariantTarget({ productId, variant });
+    setShowDeleteVariantConfirm(true);
+  };
+
+  const handleDeleteVariant = async () => {
+    if (!deleteVariantTarget) return;
+    setSaving(true);
     try {
-      await productService.deleteVariant(productId, variantId);
-      toast.success('Variant deleted');
+      await productService.deleteVariant(deleteVariantTarget.productId, deleteVariantTarget.variant.id);
+      toast.success('Variant deactivated — hidden from POS and the store, but recoverable');
+      setShowDeleteVariantConfirm(false);
       fetchProducts();
     } catch (err) {
       toast.error(err.message || 'Failed to delete variant');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -336,6 +371,15 @@ function ProductsPage() {
             <option key={c.id} value={c.id}>{c.name}</option>
           ))}
         </select>
+        <label className="flex items-center gap-2 px-3 text-sm text-gray-600 dark:text-gray-400 flex-shrink-0 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showInactive}
+            onChange={e => setShowInactive(e.target.checked)}
+            className="w-4 h-4 accent-orange-600"
+          />
+          Show deactivated
+        </label>
         <button onClick={fetchProducts} className="btn-secondary flex items-center gap-2 flex-shrink-0">
           <RefreshCw className="h-4 w-4" />
         </button>
@@ -353,7 +397,7 @@ function ProductsPage() {
       ) : (
         <div className="space-y-3">
           {products.map(product => (
-            <div key={product.id} className="card overflow-hidden">
+            <div key={product.id} className={`card overflow-hidden ${product.is_active === false ? 'opacity-60' : ''}`}>
               {/* Product header row */}
               <div className="flex items-center gap-3 p-4">
                 {/* Expand toggle */}
@@ -379,6 +423,7 @@ function ProductsPage() {
                 <div className="flex-1 min-w-0">
                   <p className="font-semibold text-gray-900 dark:text-gray-100">{product.name}</p>
                   <div className="flex items-center gap-2 mt-0.5">
+                    {product.is_active === false && <Badge color="gray" size="sm">Deactivated</Badge>}
                     {product.category_name && (
                       <Badge color="orange" size="sm">{product.category_name}</Badge>
                     )}
@@ -389,6 +434,16 @@ function ProductsPage() {
                 </div>
 
                 {/* Actions */}
+                {product.is_active === false ? (
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                      onClick={() => handleReactivateProduct(product)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/40 rounded-lg font-medium transition-colors"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" /> Reactivate
+                    </button>
+                  </div>
+                ) : (
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <button
                     onClick={() => openAddVariant(product.id)}
@@ -409,6 +464,7 @@ function ProductsPage() {
                     <Trash2 className="h-4 w-4" />
                   </button>
                 </div>
+                )}
               </div>
 
               {/* Expanded variants */}
@@ -439,7 +495,7 @@ function ProductsPage() {
                               : (v.quantity ?? 0) <= (v.low_stock_threshold || 5) ? 'low_stock'
                               : 'in_stock';
                             return (
-                              <tr key={v.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/30">
+                              <tr key={v.id} className={`hover:bg-gray-50 dark:hover:bg-gray-700/30 ${v.is_active === false ? 'opacity-60' : ''}`}>
                                 <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 font-mono text-xs">{v.sku || '-'}</td>
                                 <td className="px-4 py-2.5 text-gray-700 dark:text-gray-300">{v.flavor || '-'}</td>
                                 <td className="px-4 py-2.5 text-gray-700 dark:text-gray-300">{v.size || '-'}</td>
@@ -447,27 +503,42 @@ function ProductsPage() {
                                 <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400">{v.cost_price ? formatCurrency(v.cost_price) : '-'}</td>
                                 <td className="px-4 py-2.5 font-medium text-gray-900 dark:text-gray-100">{v.quantity ?? 0}</td>
                                 <td className="px-4 py-2.5">
-                                  <Badge
-                                    color={stockStatus === 'in_stock' ? 'green' : stockStatus === 'low_stock' ? 'yellow' : 'red'}
-                                    size="sm"
-                                  >
-                                    {stockStatus === 'in_stock' ? 'In Stock' : stockStatus === 'low_stock' ? 'Low Stock' : 'Out of Stock'}
-                                  </Badge>
+                                  {v.is_active === false ? (
+                                    <Badge color="gray" size="sm">Deactivated</Badge>
+                                  ) : (
+                                    <Badge
+                                      color={stockStatus === 'in_stock' ? 'green' : stockStatus === 'low_stock' ? 'yellow' : 'red'}
+                                      size="sm"
+                                    >
+                                      {stockStatus === 'in_stock' ? 'In Stock' : stockStatus === 'low_stock' ? 'Low Stock' : 'Out of Stock'}
+                                    </Badge>
+                                  )}
                                 </td>
                                 <td className="px-4 py-2.5">
                                   <div className="flex items-center justify-end gap-1">
-                                    <button
-                                      onClick={() => openEditVariant(product.id, v)}
-                                      className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
-                                    >
-                                      <Edit2 className="h-3.5 w-3.5" />
-                                    </button>
-                                    <button
-                                      onClick={() => handleDeleteVariant(product.id, v.id)}
-                                      className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors"
-                                    >
-                                      <Trash2 className="h-3.5 w-3.5" />
-                                    </button>
+                                    {v.is_active === false ? (
+                                      <button
+                                        onClick={() => handleReactivateVariant(product.id, v)}
+                                        className="flex items-center gap-1 px-2 py-1 text-xs text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded transition-colors"
+                                      >
+                                        <RotateCcw className="h-3.5 w-3.5" /> Reactivate
+                                      </button>
+                                    ) : (
+                                      <>
+                                        <button
+                                          onClick={() => openEditVariant(product.id, v)}
+                                          className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+                                        >
+                                          <Edit2 className="h-3.5 w-3.5" />
+                                        </button>
+                                        <button
+                                          onClick={() => openDeleteVariantConfirm(product.id, v)}
+                                          className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </button>
+                                      </>
+                                    )}
                                   </div>
                                 </td>
                               </tr>
@@ -709,10 +780,47 @@ function ProductsPage() {
           </div>
         }
       >
-        <p className="text-gray-600 dark:text-gray-400">
-          Are you sure you want to delete <strong className="text-gray-900 dark:text-gray-100">{deleteTarget?.name}</strong>?
-          This will also delete all variants. This action cannot be undone.
-        </p>
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center flex-shrink-0">
+            <AlertTriangle className="h-5 w-5 text-red-600 dark:text-red-400" />
+          </div>
+          <p className="text-gray-600 dark:text-gray-400">
+            Deactivate <strong className="text-gray-900 dark:text-gray-100">{deleteTarget?.name}</strong>?
+            It will immediately disappear from the POS, the online store, and this list —
+            its variants and stock data are kept as-is, and it can be brought back later with
+            "Show deactivated" + Reactivate.
+          </p>
+        </div>
+      </Modal>
+
+      {/* ── Delete Variant Confirm Modal ── */}
+      <Modal
+        isOpen={showDeleteVariantConfirm}
+        onClose={() => setShowDeleteVariantConfirm(false)}
+        title="Deactivate Variant"
+        size="sm"
+        footer={
+          <div className="flex gap-3 justify-end">
+            <button onClick={() => setShowDeleteVariantConfirm(false)} className="btn-secondary">Cancel</button>
+            <button onClick={handleDeleteVariant} disabled={saving} className="btn-danger">
+              {saving ? 'Deactivating...' : 'Deactivate'}
+            </button>
+          </div>
+        }
+      >
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center flex-shrink-0">
+            <AlertTriangle className="h-5 w-5 text-red-600 dark:text-red-400" />
+          </div>
+          <p className="text-gray-600 dark:text-gray-400">
+            Deactivate <strong className="text-gray-900 dark:text-gray-100">
+              {deleteVariantTarget?.variant?.sku || deleteVariantTarget?.variant?.size || 'this variant'}
+            </strong>?
+            It will immediately stop showing up for sale in the POS and online store — its price,
+            cost, and stock quantity are kept as-is, and it can be brought back later with
+            "Show deactivated" + Reactivate.
+          </p>
+        </div>
       </Modal>
 
       {/* ── Category Modal ── */}
