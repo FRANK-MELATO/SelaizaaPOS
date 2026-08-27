@@ -168,30 +168,41 @@ function POSPage() {
 
     setSaleProcessing(true);
     try {
+      // Build the payment lines the API actually expects (an array of
+      // { method, amount, reference }, summing to the sale total — not the
+      // single payment_method/amount_received fields PaymentPanel tracks
+      // locally for its own UI, e.g. change calculation).
+      let payments;
+      if (paymentData.method === 'split') {
+        const cardAmount = paymentData.cardAmount || 0;
+        // Any overpayment is refunded as change from the cash side, so the
+        // cash amount actually applied to the sale is whatever's left after
+        // the card portion — not the raw amount the cashier typed in.
+        const cashAmount = Math.max(0, total - cardAmount);
+        payments = [
+          ...(cashAmount > 0 ? [{ method: 'cash', amount: cashAmount }] : []),
+          ...(cardAmount > 0 ? [{ method: 'card', amount: cardAmount, reference: paymentData.reference || null }] : [])
+        ];
+      } else {
+        payments = [{
+          method: paymentData.method,
+          amount: total,
+          reference: paymentData.method === 'cash' ? null : (paymentData.reference || null)
+        }];
+      }
+
       const salePayload = {
         items: items.map(i => ({
           variant_id: i.variant_id,
           quantity: i.quantity,
           unit_price: i.unit_price
         })),
-        payment_method: paymentData.method,
+        payments,
         discount_type: 'fixed',
-        discount_amount: discountAmount + (pointsDiscount || 0),
-        tax_amount: tax,
-        subtotal,
-        total_amount: total,
+        discount_value: discountAmount,
+        tax_rate: 15,
         customer_id: selectedCustomer?.id || null,
-        amount_received: paymentData.amountReceived || null,
-        change_amount: paymentData.change || 0,
-        reference: paymentData.reference || null,
-        points_redeemed: redeemPoints ? pointsToRedeem : 0,
-        cashier_id: user?.id,
-        // Split payment
-        ...(paymentData.method === 'split' && {
-          split_cash: paymentData.cashAmount,
-          split_card: paymentData.cardAmount,
-          split_reference: paymentData.reference
-        })
+        points_redeemed: redeemPoints ? pointsToRedeem : 0
       };
 
       const res = await salesService.createSale(salePayload);
@@ -403,9 +414,16 @@ function POSPage() {
                       <input
                         type="number"
                         min="0"
+                        step="100"
                         max={maxRedeemable}
                         value={pointsToRedeem}
-                        onChange={e => setPointsToRedeem(Math.min(parseInt(e.target.value) || 0, maxRedeemable))}
+                        onChange={e => {
+                          const capped = Math.min(parseInt(e.target.value) || 0, maxRedeemable);
+                          // Redemption is only ever applied in blocks of 100 points
+                          // server-side, so round down here too or the payment
+                          // total won't match what the backend computes.
+                          setPointsToRedeem(Math.floor(capped / 100) * 100);
+                        }}
                         className="input text-sm py-1.5"
                         placeholder="Points to redeem"
                       />

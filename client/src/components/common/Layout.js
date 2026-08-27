@@ -3,7 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom';
 import {
   ShoppingCart, Package, Archive, Users, BarChart2,
   ShoppingBag, UserCog, Moon, Sun, Menu, X, Bell,
-  LogOut, ChevronDown, Wifi, WifiOff, Store
+  LogOut, ChevronDown, Wifi, WifiOff, Store, Truck
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -15,6 +15,7 @@ const navItems = [
   { to: '/products', icon: Package, label: 'Products', roles: ['admin'] },
   { to: '/inventory', icon: Archive, label: 'Inventory', roles: ['admin', 'cashier'] },
   { to: '/customers', icon: Users, label: 'Customers', roles: ['admin', 'cashier'] },
+  { to: '/purchase-orders', icon: Truck, label: 'Purchase Orders', roles: ['admin'] },
   { to: '/reports', icon: BarChart2, label: 'Reports', roles: ['admin'] },
   { to: '/online-orders', icon: ShoppingBag, label: 'Online Orders', roles: ['admin'] },
   { to: '/users', icon: UserCog, label: 'Staff', roles: ['admin'] }
@@ -45,8 +46,11 @@ function Layout({ children }) {
       } catch {}
       if (isAdmin) {
         try {
-          const orders = await onlineOrderService.getOrders({ status: 'pending' });
-          const list = orders?.data || orders;
+          const res = await onlineOrderService.getOrders({ status: 'pending' });
+          // getOrders responds with { data: { orders: [...], pagination } },
+          // not a bare array — read .data.orders (falling back to a couple
+          // of looser shapes) so the count doesn't silently stay at 0.
+          const list = res?.data?.orders ?? res?.orders ?? res?.data ?? res;
           setPendingOrderCount(Array.isArray(list) ? list.length : 0);
         } catch {}
       }

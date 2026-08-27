@@ -397,6 +397,43 @@ const getLoyaltyReport = async (req, res, next) => {
 };
 
 /**
+ * GET /api/reports/purchase-spend
+ * Money actually spent restocking in the period — i.e. purchase orders
+ * that were received (inventory delivered, cost incurred), not just
+ * created. Paired with sales-summary's total_revenue on the client to show
+ * a rough net cash figure: revenue in vs. spent restocking.
+ */
+const getPurchaseSpend = async (req, res, next) => {
+  try {
+    const { period = 'today', start_date, end_date } = req.query;
+    const { startStr, endStr } = buildDateRange(period, start_date, end_date);
+
+    const result = await query(
+      `SELECT COALESCE(SUM(total_cost), 0) AS total_purchase_spend,
+              COUNT(*) AS orders_received
+       FROM purchase_orders
+       WHERE status = 'received'
+         AND received_at >= $1::date
+         AND received_at < ($2::date + INTERVAL '1 day')`,
+      [startStr, endStr]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        period,
+        start_date: startStr,
+        end_date: endStr,
+        total_purchase_spend: parseFloat(result.rows[0].total_purchase_spend).toFixed(2),
+        orders_received: parseInt(result.rows[0].orders_received)
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * GET /api/reports/inventory
  * Stock levels, valuation, low stock count
  */
@@ -470,5 +507,6 @@ module.exports = {
   getBestSellingProducts,
   getPaymentMethodBreakdown,
   getLoyaltyReport,
-  getInventoryReport
+  getInventoryReport,
+  getPurchaseSpend
 };

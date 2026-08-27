@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Minus, Plus, Trash2 } from 'lucide-react';
 import { formatCurrency } from '../../utils/formatters';
 import { useCart } from '../../context/CartContext';
@@ -8,6 +8,20 @@ function CartItem({ item }) {
 
   const lineTotal = item.unit_price * item.quantity;
   const isMaxStock = item.stock_quantity !== undefined && item.quantity >= item.stock_quantity;
+
+  // Local text buffer so the field can be typed into freely (including a
+  // momentarily empty value) without every keystroke fighting the clamped
+  // quantity coming back from the cart.
+  const [qtyText, setQtyText] = useState(String(item.quantity));
+  useEffect(() => { setQtyText(String(item.quantity)); }, [item.quantity]);
+
+  const commitQty = () => {
+    let next = parseInt(qtyText, 10);
+    if (!Number.isFinite(next) || next < 1) next = 1;
+    if (item.stock_quantity !== undefined) next = Math.min(next, item.stock_quantity);
+    updateQuantity(item.variant_id, next);
+    setQtyText(String(next));
+  };
 
   return (
     <div className="flex items-start gap-2 py-2.5 border-b border-gray-100 dark:border-gray-700/50 last:border-0">
@@ -35,9 +49,19 @@ function CartItem({ item }) {
         >
           <Minus className="h-3 w-3" />
         </button>
-        <span className="w-7 text-center text-sm font-semibold text-gray-900 dark:text-gray-100">
-          {item.quantity}
-        </span>
+        <input
+          type="text"
+          inputMode="numeric"
+          value={qtyText}
+          onChange={e => setQtyText(e.target.value.replace(/[^0-9]/g, ''))}
+          onFocus={e => e.target.select()}
+          onBlur={commitQty}
+          onKeyDown={e => {
+            if (e.key === 'Enter') { commitQty(); e.currentTarget.blur(); }
+          }}
+          aria-label="Quantity"
+          className="w-9 text-center text-sm font-semibold text-gray-900 dark:text-gray-100 bg-transparent border border-transparent hover:border-gray-300 dark:hover:border-gray-600 focus:border-orange-400 dark:focus:border-orange-500 rounded-md outline-none py-0.5"
+        />
         <button
           onClick={() => updateQuantity(item.variant_id, item.quantity + 1)}
           disabled={isMaxStock}

@@ -1,4 +1,5 @@
 const { query, getClient } = require('../config/db');
+const { normalizePhone } = require('../utils/phone');
 
 /**
  * Generate online order number: ONL-YYYYMMDD-NNNN
@@ -186,11 +187,17 @@ const placeOrder = async (req, res, next) => {
       );
     }
 
-    // Auto-register or update customer from checkout details
+    // Auto-register or update customer from checkout details.
+    // Match by phone number regardless of formatting (+266 prefix, spaces,
+    // etc.) so the same person placing repeat orders lands on one customer
+    // record instead of spawning a near-duplicate every time they type
+    // their number slightly differently.
     try {
+      const normalizedPhone = normalizePhone(customer_phone);
       const existingCustomer = await client.query(
-        'SELECT id FROM customers WHERE phone = $1',
-        [customer_phone.trim()]
+        `SELECT id FROM customers
+         WHERE RIGHT(regexp_replace(phone, '\\D', '', 'g'), 8) = RIGHT($1, 8)`,
+        [normalizedPhone]
       );
       if (existingCustomer.rows.length === 0) {
         // If an email is provided, check it isn't already taken by a different account
@@ -206,7 +213,7 @@ const placeOrder = async (req, res, next) => {
         await client.query(
           `INSERT INTO customers (name, phone, email, address)
            VALUES ($1, $2, $3, $4)`,
-          [customer_name.trim(), customer_phone.trim(), emailToUse, delivery_address || null]
+          [customer_name.trim(), normalizedPhone, emailToUse, delivery_address || null]
         );
       } else if (delivery_address) {
         await client.query(
@@ -470,12 +477,18 @@ const trackOrder = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'order_number and phone are required.' });
     }
 
+    // Match order number case-insensitively and compare phone numbers by
+    // their last 8 digits so formatting differences (spaces, a leading
+    // "+266"/"266"/"0", dashes) between what the customer typed at checkout
+    // and what they type here don't produce a false "not found".
+    const normalizedPhone = normalizePhone(phone);
     const result = await query(
       `SELECT id, order_number, status, payment_status, customer_name, customer_phone,
               subtotal, delivery_fee, total, notes, created_at, updated_at
        FROM online_orders
-       WHERE order_number = $1 AND customer_phone = $2`,
-      [order_number.trim(), phone.trim()]
+       WHERE UPPER(order_number) = UPPER($1)
+         AND RIGHT(regexp_replace(customer_phone, '\\D', '', 'g'), 8) = RIGHT($2, 8)`,
+      [order_number.trim(), normalizedPhone]
     );
 
     if (result.rows.length === 0) {

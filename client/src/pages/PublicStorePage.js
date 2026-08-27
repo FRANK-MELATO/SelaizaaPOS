@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useReactToPrint } from 'react-to-print';
 import {
   ShoppingCart, X, Plus, Minus, Package, Store, Phone, MapPin,
   CheckCircle, Search, Truck, CreditCard, Banknote,
-  Smartphone, ArrowRight, Tag, User, LogOut, Clock
+  Smartphone, ArrowRight, Tag, User, LogOut, Clock, Download
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { onlineOrderService } from '../services/api';
@@ -84,6 +85,12 @@ function PublicStorePage() {
   const [orderSuccess, setOrderSuccess] = useState(null);
   const [liveOrder, setLiveOrder] = useState(null);
   const lastStatusRef = useRef(null);
+  const confirmationPrintRef = useRef(null);
+  const handleDownloadConfirmation = useReactToPrint({
+    content: () => confirmationPrintRef.current,
+    documentTitle: `Order-${orderSuccess?.order_number || 'confirmation'}`,
+    removeAfterPrint: false
+  });
 
   // Customer identification (persisted in localStorage)
   const [customerProfile, setCustomerProfile] = useState(() => {
@@ -287,7 +294,15 @@ function PublicStorePage() {
       };
       const res = await onlineOrderService.placeOrder(payload);
       const order = res?.data || res;
-      setOrderSuccess(order);
+      // The create-order response doesn't echo back line items, so snapshot
+      // them from the cart now — the download/print view needs them and
+      // the cart is about to be emptied.
+      setOrderSuccess({
+        ...order,
+        items: cartItems,
+        payment_method: checkoutForm.payment_method,
+        delivery_address: checkoutForm.address
+      });
       setCartItems([]);
       setShowCheckout(false);
       setShowCart(false);
@@ -306,55 +321,86 @@ function PublicStorePage() {
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-4">
         <div className="max-w-md w-full">
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl overflow-hidden">
-            <div className="bg-green-600 px-6 py-8 text-center text-white">
-              <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                <CheckCircle className="h-10 w-10 text-white" />
+            <div ref={confirmationPrintRef}>
+              <div className="bg-green-600 px-6 py-8 text-center text-white">
+                <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <CheckCircle className="h-10 w-10 text-white" />
+                </div>
+                <h1 className="text-2xl font-bold mb-1">Order Confirmed!</h1>
+                <p className="text-green-100 text-sm">Thank you, your order has been received</p>
               </div>
-              <h1 className="text-2xl font-bold mb-1">Order Confirmed!</h1>
-              <p className="text-green-100 text-sm">Thank you, your order has been received</p>
+
+              <div className="px-6 py-5 space-y-5">
+                <div className="space-y-2">
+                  {orderSuccess.order_number && (
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100 dark:border-gray-700">
+                      <span className="text-sm text-gray-500 dark:text-gray-400">Order Number</span>
+                      <span className="font-bold text-orange-600 dark:text-orange-400">#{orderSuccess.order_number}</span>
+                    </div>
+                  )}
+                  {orderSuccess.customer_name && (
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100 dark:border-gray-700">
+                      <span className="text-sm text-gray-500 dark:text-gray-400">Name</span>
+                      <span className="font-medium text-gray-900 dark:text-gray-100">{orderSuccess.customer_name}</span>
+                    </div>
+                  )}
+                  {orderSuccess.delivery_address && (
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100 dark:border-gray-700 gap-4">
+                      <span className="text-sm text-gray-500 dark:text-gray-400 flex-shrink-0">Delivery Address</span>
+                      <span className="font-medium text-gray-900 dark:text-gray-100 text-right">{orderSuccess.delivery_address}</span>
+                    </div>
+                  )}
+                  {orderSuccess.items?.length > 0 && (
+                    <div className="py-2 border-b border-gray-100 dark:border-gray-700 space-y-1">
+                      <span className="text-sm text-gray-500 dark:text-gray-400">Items</span>
+                      {orderSuccess.items.map((item, i) => (
+                        <div key={i} className="flex justify-between text-sm text-gray-700 dark:text-gray-300">
+                          <span>{item.name} {[item.flavor, item.size].filter(Boolean).join(' ')} ×{item.quantity}</span>
+                          <span className="font-medium">{formatCurrency(item.price * item.quantity)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {orderSuccess.total && (
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100 dark:border-gray-700">
+                      <span className="text-sm text-gray-500 dark:text-gray-400">Order Total</span>
+                      <span className="font-semibold text-gray-900 dark:text-gray-100">{formatCurrency(orderSuccess.total)}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-2">
+                    <Clock className="h-4 w-4" />
+                    Order Status
+                    <span className="ml-auto text-xs text-gray-400 font-normal print:hidden">Auto-updates every 30s</span>
+                  </p>
+                  <StatusTimeline status={displayOrder.status || 'pending'} />
+                </div>
+
+                <div className="bg-orange-50 dark:bg-orange-900/20 rounded-xl p-4">
+                  <p className="text-sm font-semibold text-orange-700 dark:text-orange-400 mb-1">What happens next?</p>
+                  <ol className="text-sm text-gray-600 dark:text-gray-400 space-y-1 list-decimal list-inside">
+                    <li>We will call you on <strong>{orderSuccess.customer_phone}</strong> to confirm</li>
+                    <li>Our team will prepare your order</li>
+                    <li>Your order will be delivered to your address</li>
+                  </ol>
+                </div>
+
+                <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                  <Phone className="h-4 w-4 flex-shrink-0" />
+                  <span>Questions? Call us on <strong>+266 50410310</strong></span>
+                </div>
+              </div>
             </div>
 
-            <div className="px-6 py-5 space-y-5">
-              <div className="space-y-2">
-                {orderSuccess.order_number && (
-                  <div className="flex items-center justify-between py-2 border-b border-gray-100 dark:border-gray-700">
-                    <span className="text-sm text-gray-500 dark:text-gray-400">Order Number</span>
-                    <span className="font-bold text-orange-600 dark:text-orange-400">#{orderSuccess.order_number}</span>
-                  </div>
-                )}
-                {orderSuccess.total && (
-                  <div className="flex items-center justify-between py-2 border-b border-gray-100 dark:border-gray-700">
-                    <span className="text-sm text-gray-500 dark:text-gray-400">Order Total</span>
-                    <span className="font-semibold text-gray-900 dark:text-gray-100">{formatCurrency(orderSuccess.total)}</span>
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-2">
-                  <Clock className="h-4 w-4" />
-                  Order Status
-                  <span className="ml-auto text-xs text-gray-400 font-normal">Auto-updates every 30s</span>
-                </p>
-                <StatusTimeline status={displayOrder.status || 'pending'} />
-              </div>
-
-              <div className="bg-orange-50 dark:bg-orange-900/20 rounded-xl p-4">
-                <p className="text-sm font-semibold text-orange-700 dark:text-orange-400 mb-1">What happens next?</p>
-                <ol className="text-sm text-gray-600 dark:text-gray-400 space-y-1 list-decimal list-inside">
-                  <li>We will call you on <strong>{orderSuccess.customer_phone}</strong> to confirm</li>
-                  <li>Our team will prepare your order</li>
-                  <li>Your order will be delivered to your address</li>
-                </ol>
-              </div>
-
-              <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-                <Phone className="h-4 w-4 flex-shrink-0" />
-                <span>Questions? Call us on <strong>+266 50410310</strong></span>
-              </div>
-            </div>
-
-            <div className="px-6 pb-6">
+            <div className="px-6 pb-6 space-y-2">
+              <button
+                onClick={handleDownloadConfirmation}
+                className="w-full flex items-center justify-center gap-2 py-3 border-2 border-orange-600 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 font-bold rounded-xl transition-colors"
+              >
+                <Download className="h-4 w-4" /> Download Confirmation
+              </button>
               <button
                 onClick={() => setOrderSuccess(null)}
                 className="w-full py-3 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl transition-colors"
@@ -741,7 +787,18 @@ function PublicStorePage() {
                       >
                         <Minus className="h-3 w-3" />
                       </button>
-                      <span className="w-6 text-center text-sm font-semibold">{item.quantity}</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={item.quantity}
+                        onChange={e => {
+                          const digits = e.target.value.replace(/[^0-9]/g, '');
+                          updateCartQty(item.variant_id, digits === '' ? 0 : parseInt(digits, 10));
+                        }}
+                        onFocus={e => e.target.select()}
+                        aria-label="Quantity"
+                        className="w-8 text-center text-sm font-semibold bg-transparent border border-transparent hover:border-gray-300 dark:hover:border-gray-600 focus:border-orange-400 dark:focus:border-orange-500 rounded-md outline-none"
+                      />
                       <button
                         onClick={() => updateCartQty(item.variant_id, item.quantity + 1)}
                         className="w-7 h-7 rounded-lg bg-gray-200 dark:bg-gray-600 flex items-center justify-center text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500"
