@@ -8,10 +8,11 @@ const fs = require('fs');
  */
 const getProducts = async (req, res, next) => {
   try {
-    const { search, category_id, page = 1, limit = 20 } = req.query;
+    const { search, category_id, page = 1, limit = 20, include_inactive } = req.query;
+    const includeInactive = include_inactive === 'true' || include_inactive === '1';
     const offset = (parseInt(page) - 1) * parseInt(limit);
     const params = [];
-    let whereClause = 'WHERE p.is_active = true';
+    let whereClause = includeInactive ? 'WHERE 1=1' : 'WHERE p.is_active = true';
 
     if (search) {
       params.push(`%${search}%`);
@@ -58,7 +59,7 @@ const getProducts = async (req, res, next) => {
               i.quantity, i.low_stock_threshold
        FROM product_variants pv
        LEFT JOIN inventory i ON i.variant_id = pv.id
-       WHERE pv.product_id = ANY($1) AND pv.is_active = true
+       WHERE pv.product_id = ANY($1) ${includeInactive ? '' : 'AND pv.is_active = true'}
        ORDER BY pv.size`,
       [productIds]
     );
@@ -314,14 +315,17 @@ const addVariant = async (req, res, next) => {
  * PUT /api/products/variants/:id
  */
 const updateVariant = async (req, res, next) => {
+  const client = await getClient();
   try {
     const { id } = req.params;
-    const { sku, barcode, flavor, size, cost_price, is_active } = req.body;
+    const { sku, barcode, flavor, size, cost_price, is_active, stock_quantity, low_stock_threshold } = req.body;
     const price = req.body.price !== undefined ? req.body.price : req.body.unit_price;
 
-    const existing = await query('SELECT id FROM product_variants WHERE id = $1', [id]);
+    await client.query('BEGIN');
+
+    const existing = await client.query('SELECT id FROM product_variants WHERE id = $1', [id]);
     if (existing.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Variant not found.' });
+      throw Object.assign(new Error('Variant not found.'), { statusCode: 404 });
     }
 
     const fields = [];
@@ -336,21 +340,81 @@ const updateVariant = async (req, res, next) => {
     if (cost_price !== undefined) { fields.push(`cost_price = $${i++}`);  values.push(parseFloat(cost_price)); }
     if (is_active !== undefined)  { fields.push(`is_active = $${i++}`);   values.push(Boolean(is_active)); }
 
-    if (fields.length === 0) {
-      return res.status(400).json({ success: false, message: 'No fields to update.' });
+    if (fields.length > 0) {
+      fields.push(`updated_at = NOW()`);
+      values.push(id);
+      await client.query(
+        `UPDATE product_variants SET ${fields.join(', ')} WHERE id = $${i}`,
+        values
+      );
     }
 
-    fields.push(`updated_at = NOW()`);
-    values.push(id);
+    // Stock quantity and low-stock threshold live on the separate
+    // `inventory` row, not on product_variants, so the fields above never
+    // touched them — the "Stock" field in the edit-variant form silently
+    // did nothing. Upsert into inventory here too, and log the change to
+    // inventory_history so it's auditable like any other stock adjustment.
+    if (stock_quantity !== undefined || low_stock_threshold !== undefined) {
+      const invExisting = await client.query(
+        'SELECT quantity, low_stock_threshold FROM inventory WHERE variant_id = $1',
+        [id]
+      );
 
-    const result = await query(
-      `UPDATE product_variants SET ${fields.join(', ')} WHERE id = $${i} RETURNING *`,
-      values
+      const newQty = stock_quantity !== undefined && stock_quantity !== ''
+        ? parseInt(stock_quantity)
+        : (invExisting.rows[0]?.quantity ?? 0);
+      const newThreshold = low_stock_threshold !== undefined && low_stock_threshold !== ''
+        ? parseInt(low_stock_threshold)
+        : (invExisting.rows[0]?.low_stock_threshold ?? 10);
+
+      if (!Number.isInteger(newQty) || newQty < 0) {
+        throw Object.assign(new Error('Stock quantity must be a non-negative whole number.'), { statusCode: 400 });
+      }
+
+      if (invExisting.rows.length === 0) {
+        await client.query(
+          `INSERT INTO inventory (variant_id, quantity, low_stock_threshold) VALUES ($1, $2, $3)`,
+          [id, newQty, newThreshold]
+        );
+        if (newQty > 0) {
+          await client.query(
+            `INSERT INTO inventory_history (variant_id, change_type, quantity_change, quantity_after, notes, created_by)
+             VALUES ($1, 'adjustment', $2, $3, 'Stock set via product edit', $4)`,
+            [id, newQty, newQty, req.user.id]
+          );
+        }
+      } else {
+        const prevQty = invExisting.rows[0].quantity;
+        await client.query(
+          `UPDATE inventory SET quantity = $1, low_stock_threshold = $2, updated_at = NOW() WHERE variant_id = $3`,
+          [newQty, newThreshold, id]
+        );
+        if (newQty !== prevQty) {
+          await client.query(
+            `INSERT INTO inventory_history (variant_id, change_type, quantity_change, quantity_after, notes, created_by)
+             VALUES ($1, 'adjustment', $2, $3, 'Stock set via product edit', $4)`,
+            [id, newQty - prevQty, newQty, req.user.id]
+          );
+        }
+      }
+    }
+
+    await client.query('COMMIT');
+
+    const finalResult = await query(
+      `SELECT pv.*, i.quantity, i.low_stock_threshold
+       FROM product_variants pv
+       LEFT JOIN inventory i ON i.variant_id = pv.id
+       WHERE pv.id = $1`,
+      [id]
     );
 
-    res.json({ success: true, message: 'Variant updated.', data: result.rows[0] });
+    res.json({ success: true, message: 'Variant updated.', data: finalResult.rows[0] });
   } catch (err) {
+    await client.query('ROLLBACK');
     next(err);
+  } finally {
+    client.release();
   }
 };
 
