@@ -1,4 +1,5 @@
 const { query, getClient } = require('../config/db');
+const { normalizePhone } = require('../utils/phone');
 
 /**
  * Calculate loyalty tier
@@ -129,10 +130,29 @@ const createCustomer = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Customer name is required.' });
     }
 
+    const normalizedPhone = phone ? normalizePhone(phone) : null;
+
+    // Same person re-entered with the phone typed differently (with/without
+    // "+266", spaces, etc.) is still the same customer — point the cashier
+    // at the existing record instead of silently creating a duplicate.
+    if (normalizedPhone) {
+      const dupe = await query(
+        `SELECT id, name FROM customers
+         WHERE RIGHT(regexp_replace(phone, '\\D', '', 'g'), 8) = RIGHT($1, 8)`,
+        [normalizedPhone]
+      );
+      if (dupe.rows.length > 0) {
+        return res.status(409).json({
+          success: false,
+          message: `A customer with this phone number already exists: ${dupe.rows[0].name} (ID ${dupe.rows[0].id}). Edit that customer instead of creating a new one.`
+        });
+      }
+    }
+
     const result = await query(
       `INSERT INTO customers (name, email, phone, address)
        VALUES ($1, $2, $3, $4) RETURNING *`,
-      [name.trim(), email ? email.toLowerCase().trim() : null, phone || null, address || null]
+      [name.trim(), email ? email.toLowerCase().trim() : null, normalizedPhone, address || null]
     );
 
     res.status(201).json({
@@ -158,13 +178,28 @@ const updateCustomer = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Customer not found.' });
     }
 
+    if (phone) {
+      const normalizedPhone = normalizePhone(phone);
+      const dupe = await query(
+        `SELECT id, name FROM customers
+         WHERE RIGHT(regexp_replace(phone, '\\D', '', 'g'), 8) = RIGHT($1, 8) AND id != $2`,
+        [normalizedPhone, id]
+      );
+      if (dupe.rows.length > 0) {
+        return res.status(409).json({
+          success: false,
+          message: `That phone number already belongs to another customer: ${dupe.rows[0].name} (ID ${dupe.rows[0].id}).`
+        });
+      }
+    }
+
     const fields = [];
     const values = [];
     let i = 1;
 
     if (name !== undefined)    { fields.push(`name = $${i++}`);    values.push(name.trim()); }
     if (email !== undefined)   { fields.push(`email = $${i++}`);   values.push(email ? email.toLowerCase().trim() : null); }
-    if (phone !== undefined)   { fields.push(`phone = $${i++}`);   values.push(phone); }
+    if (phone !== undefined)   { fields.push(`phone = $${i++}`);   values.push(phone ? normalizePhone(phone) : null); }
     if (address !== undefined) { fields.push(`address = $${i++}`); values.push(address); }
 
     if (fields.length === 0) {

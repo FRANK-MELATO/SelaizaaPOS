@@ -14,6 +14,7 @@ import InventoryPage from './pages/InventoryPage';
 import CustomersPage from './pages/CustomersPage';
 import ReportsPage from './pages/ReportsPage';
 import OnlineOrdersPage from './pages/OnlineOrdersPage';
+import PurchaseOrdersPage from './pages/PurchaseOrdersPage';
 import UsersPage from './pages/UsersPage';
 import PublicStorePage from './pages/PublicStorePage';
 
@@ -130,6 +131,16 @@ function App() {
               <ProtectedRoute adminOnly>
                 <Layout>
                   <OnlineOrdersPage />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/purchase-orders"
+            element={
+              <ProtectedRoute adminOnly>
+                <Layout>
+                  <PurchaseOrdersPage />
                 </Layout>
               </ProtectedRoute>
             }

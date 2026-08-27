@@ -107,6 +107,7 @@ export const supplierService = {
   updateSupplier: (id, data) => api.put(`/suppliers/${id}`, data),
   getPurchaseOrders: (params) => api.get('/purchase-orders', { params }),
   createPurchaseOrder: (data) => api.post('/purchase-orders', data),
+  getPurchaseOrder: (id) => api.get(`/purchase-orders/${id}`),
   receivePurchaseOrder: (id, data) => api.post(`/purchase-orders/${id}/receive`, data)
 };
 
@@ -129,6 +130,7 @@ export const reportService = {
   getPaymentMethods: (params) => api.get('/reports/payment-methods', { params }),
   getLoyaltyReport: (params) => api.get('/reports/loyalty', { params }),
   getInventoryReport: (params) => api.get('/reports/inventory', { params }),
+  getPurchaseSpend: (params) => api.get('/reports/purchase-spend', { params }),
   exportCSV: (type, params) => api.get(`/reports/export/${type}`, { params, responseType: 'blob' }),
   exportPDF: (type, params) => api.get(`/reports/export/${type}/pdf`, { params, responseType: 'blob' })
 };

@@ -242,6 +242,48 @@ const getPurchaseOrders = async (req, res, next) => {
 };
 
 /**
+ * GET /api/purchase-orders/:id
+ * Single PO with line items (needed to drive the receive flow — the list
+ * endpoint above only returns PO-level fields).
+ */
+const getPurchaseOrderById = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const poResult = await query(
+      `SELECT po.*, s.name AS supplier_name, s.phone AS supplier_phone,
+              u.name AS created_by_name
+       FROM purchase_orders po
+       LEFT JOIN suppliers s ON s.id = po.supplier_id
+       LEFT JOIN users u ON u.id = po.created_by
+       WHERE po.id = $1`,
+      [id]
+    );
+
+    if (poResult.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Purchase order not found.' });
+    }
+
+    const itemsResult = await query(
+      `SELECT poi.*, pv.sku, pv.size, pv.flavor, p.name AS product_name
+       FROM purchase_order_items poi
+       JOIN product_variants pv ON pv.id = poi.variant_id
+       JOIN products p ON p.id = pv.product_id
+       WHERE poi.po_id = $1
+       ORDER BY poi.id`,
+      [id]
+    );
+
+    res.json({
+      success: true,
+      data: { ...poResult.rows[0], items: itemsResult.rows }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * POST /api/purchase-orders/:id/receive
  * Mark PO as received, update inventory
  */
@@ -351,5 +393,6 @@ module.exports = {
   updateSupplier,
   createPurchaseOrder,
   getPurchaseOrders,
+  getPurchaseOrderById,
   receivePurchaseOrder
 };

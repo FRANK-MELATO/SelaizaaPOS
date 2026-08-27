@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   BarChart2, TrendingUp, ShoppingBag, Users, DollarSign,
-  Download, Calendar, RefreshCw, Package, Star, CreditCard
+  Download, Calendar, RefreshCw, Package, Star, CreditCard,
+  Wallet, ArrowDownCircle, ArrowUpCircle, Scale
 } from 'lucide-react';
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
@@ -9,7 +10,7 @@ import {
 } from 'recharts';
 import toast from 'react-hot-toast';
 import { reportService } from '../services/api';
-import { formatCurrency, formatDate, parseDateRange } from '../utils/formatters';
+import { formatCurrency } from '../utils/formatters';
 import StatCard from '../components/common/StatCard';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import Badge from '../components/common/Badge';
@@ -57,34 +58,96 @@ function ReportsPage() {
   const [paymentMethods, setPaymentMethods] = useState([]);
   const [loyaltyData, setLoyaltyData] = useState(null);
   const [inventoryReport, setInventoryReport] = useState(null);
+  const [purchaseSpend, setPurchaseSpend] = useState(null);
+
+  // The report endpoints key off `period` (+ snake_case `start_date`/
+  // `end_date` for a custom range) and default to `period=today`/`month`
+  // whenever it's missing — they don't read camelCase `startDate`/`endDate`
+  // at all, so the date-range picker up top used to have no effect on what
+  // came back (every view silently showed "today", regardless of which
+  // filter was selected). `getRevenueChart` separately takes a `days`
+  // count, so translate the picker into that too.
+  const DAYS_BY_RANGE = { today: 1, week: 7, month: 30 };
 
   const getDateParams = useCallback(() => {
     if (dateRange === 'custom') {
-      return { startDate: customDates.start, endDate: customDates.end };
+      const days = customDates.start && customDates.end
+        ? Math.max(1, Math.round((new Date(customDates.end) - new Date(customDates.start)) / 86400000) + 1)
+        : 30;
+      return { period: 'custom', start_date: customDates.start, end_date: customDates.end, days };
     }
-    return parseDateRange(dateRange);
+    return { period: dateRange, days: DAYS_BY_RANGE[dateRange] || 30 };
   }, [dateRange, customDates]);
 
   const fetchAllReports = useCallback(async () => {
     const params = getDateParams();
-    if (!params.startDate) return;
+    if (params.period === 'custom' && (!params.start_date || !params.end_date)) return;
     setLoading(true);
     try {
-      const [sumRes, revRes, bestRes, payRes, loyRes, invRes] = await Promise.allSettled([
+      const [sumRes, revRes, bestRes, payRes, loyRes, invRes, spendRes] = await Promise.allSettled([
         reportService.getSalesSummary(params),
         reportService.getRevenueChart(params),
         reportService.getBestSelling(params),
         reportService.getPaymentMethods(params),
         reportService.getLoyaltyReport(params),
-        reportService.getInventoryReport(params)
+        reportService.getInventoryReport(params),
+        reportService.getPurchaseSpend(params)
       ]);
 
-      if (sumRes.status === 'fulfilled') setSummary(sumRes.value?.data || sumRes.value);
-      if (revRes.status === 'fulfilled') setRevenueChart(Array.isArray(revRes.value?.data || revRes.value) ? (revRes.value?.data || revRes.value) : []);
-      if (bestRes.status === 'fulfilled') setBestSelling(Array.isArray(bestRes.value?.data || bestRes.value) ? (bestRes.value?.data || bestRes.value).slice(0, 10) : []);
-      if (payRes.status === 'fulfilled') setPaymentMethods(Array.isArray(payRes.value?.data || payRes.value) ? (payRes.value?.data || payRes.value) : []);
-      if (loyRes.status === 'fulfilled') setLoyaltyData(loyRes.value?.data || loyRes.value);
-      if (invRes.status === 'fulfilled') setInventoryReport(invRes.value?.data || invRes.value);
+      // Each endpoint nests its payload differently ({ data: { summary } },
+      // { data: { chart } }, { data: { products } }, { data: { breakdown } }
+      // ...) — unwrap each to the actual array/object the UI renders instead
+      // of the envelope, or everything below quietly renders as empty.
+      if (sumRes.status === 'fulfilled') {
+        const payload = sumRes.value?.data || sumRes.value;
+        setSummary(payload?.summary || payload || null);
+      }
+      if (revRes.status === 'fulfilled') {
+        const payload = revRes.value?.data || revRes.value;
+        const chart = payload?.chart || payload;
+        setRevenueChart(Array.isArray(chart) ? chart : []);
+      }
+      if (bestRes.status === 'fulfilled') {
+        const payload = bestRes.value?.data || bestRes.value;
+        const products = payload?.products || payload;
+        setBestSelling(Array.isArray(products) ? products.slice(0, 10) : []);
+      }
+      if (payRes.status === 'fulfilled') {
+        const payload = payRes.value?.data || payRes.value;
+        const breakdown = payload?.breakdown || payload;
+        setPaymentMethods(Array.isArray(breakdown) ? breakdown : []);
+      }
+      if (loyRes.status === 'fulfilled') {
+        const payload = loyRes.value?.data || loyRes.value;
+        const earn = payload?.period_transactions?.find(t => t.transaction_type === 'earn');
+        const redeem = payload?.period_transactions?.find(t => t.transaction_type === 'redeem');
+        const tierCount = (name) => parseInt(payload?.by_tier?.find(t => t.loyalty_tier === name)?.customer_count) || 0;
+        setLoyaltyData({
+          points_issued: parseInt(earn?.total_points) || 0,
+          points_redeemed: parseInt(redeem?.total_points) || 0,
+          total_customers: parseInt(payload?.overview?.total_customers) || 0,
+          tiers: { gold: tierCount('Gold'), silver: tierCount('Silver'), bronze: tierCount('Bronze') }
+        });
+      }
+      if (invRes.status === 'fulfilled') {
+        const payload = invRes.value?.data || invRes.value;
+        setInventoryReport({
+          total_value: parseFloat(payload?.summary?.total_retail_value) || 0,
+          // rows come back as { product_name, quantity, ... } — normalize
+          // to the { name, stock_quantity } shape this page renders
+          low_stock_items: (payload?.low_stock_items || []).map(item => ({
+            name: item.product_name,
+            stock_quantity: item.quantity
+          }))
+        });
+      }
+      if (spendRes.status === 'fulfilled') {
+        const payload = spendRes.value?.data || spendRes.value;
+        setPurchaseSpend({
+          total_purchase_spend: parseFloat(payload?.total_purchase_spend) || 0,
+          orders_received: parseInt(payload?.orders_received) || 0
+        });
+      }
     } catch {
       toast.error('Failed to load reports');
     } finally {
@@ -124,6 +187,15 @@ function ReportsPage() {
       toast.error('Export failed');
     }
   };
+
+  // best-selling rows come back as { product_name, total_quantity,
+  // total_revenue, ... } with SUM()/AVG() results as numeric strings —
+  // normalize both the field names the chart reads and the types.
+  const bestSellingData = bestSelling.map(p => ({
+    name: p.product_name || p.name,
+    quantity_sold: parseInt(p.total_quantity ?? p.quantity_sold) || 0,
+    revenue: parseFloat(p.total_revenue ?? p.revenue) || 0
+  }));
 
   const paymentPieData = paymentMethods.map(pm => ({
     name: (pm.payment_method || pm.method || '').replace('_', ' ').toUpperCase(),
@@ -204,16 +276,61 @@ function ReportsPage() {
             <StatCard
               icon={TrendingUp}
               label="Average Sale"
-              value={formatCurrency(summary?.average_sale || 0)}
+              value={formatCurrency(summary?.average_sale_value || 0)}
               color="blue"
             />
             <StatCard
               icon={Package}
               label="Items Sold"
-              value={summary?.items_sold || 0}
+              value={summary?.total_items_sold || 0}
               color="purple"
             />
           </div>
+
+          {/* Net Cash Flow — revenue vs. what was spent restocking this period.
+              Not full accrual profit (it's cash-basis: purchase spend counts
+              when a PO was received, not when those goods actually sell) but
+              it directly answers "am I taking in more than I'm spending on
+              stock" for the selected range. */}
+          {(() => {
+            const revenue = parseFloat(summary?.total_revenue) || 0;
+            const spend = purchaseSpend?.total_purchase_spend || 0;
+            const net = revenue - spend;
+            return (
+              <div className="card p-5">
+                <h3 className="font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2 mb-4">
+                  <Wallet className="h-5 w-5 text-teal-500" />
+                  Net Cash Flow
+                  <span className="text-xs font-normal text-gray-400 ml-1">Revenue vs. restocking spend</span>
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="flex items-center gap-3 p-3 bg-green-50 dark:bg-green-900/20 rounded-xl">
+                    <ArrowDownCircle className="h-8 w-8 text-green-600 dark:text-green-400 flex-shrink-0" />
+                    <div>
+                      <p className="text-xs text-green-700 dark:text-green-400">Revenue In</p>
+                      <p className="text-lg font-bold text-green-700 dark:text-green-300">{formatCurrency(revenue)}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 p-3 bg-red-50 dark:bg-red-900/20 rounded-xl">
+                    <ArrowUpCircle className="h-8 w-8 text-red-600 dark:text-red-400 flex-shrink-0" />
+                    <div>
+                      <p className="text-xs text-red-700 dark:text-red-400">
+                        Spent Restocking {purchaseSpend?.orders_received ? `(${purchaseSpend.orders_received} PO${purchaseSpend.orders_received === 1 ? '' : 's'})` : ''}
+                      </p>
+                      <p className="text-lg font-bold text-red-700 dark:text-red-300">{formatCurrency(spend)}</p>
+                    </div>
+                  </div>
+                  <div className={`flex items-center gap-3 p-3 rounded-xl ${net >= 0 ? 'bg-teal-50 dark:bg-teal-900/20' : 'bg-orange-50 dark:bg-orange-900/20'}`}>
+                    <Scale className={`h-8 w-8 flex-shrink-0 ${net >= 0 ? 'text-teal-600 dark:text-teal-400' : 'text-orange-600 dark:text-orange-400'}`} />
+                    <div>
+                      <p className={`text-xs ${net >= 0 ? 'text-teal-700 dark:text-teal-400' : 'text-orange-700 dark:text-orange-400'}`}>Net</p>
+                      <p className={`text-lg font-bold ${net >= 0 ? 'text-teal-700 dark:text-teal-300' : 'text-orange-700 dark:text-orange-300'}`}>{formatCurrency(net)}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Revenue Line Chart */}
           <div className="card p-5">
@@ -260,11 +377,11 @@ function ReportsPage() {
                   <Download className="h-3.5 w-3.5" /> Export
                 </button>
               </div>
-              {bestSelling.length === 0 ? (
+              {bestSellingData.length === 0 ? (
                 <div className="h-52 flex items-center justify-center text-gray-400">No sales data</div>
               ) : (
                 <ResponsiveContainer width="100%" height={260}>
-                  <BarChart data={bestSelling} layout="vertical" margin={{ left: 100 }}>
+                  <BarChart data={bestSellingData} layout="vertical" margin={{ left: 100 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={v => `${v}`} />
                     <YAxis

@@ -6,7 +6,8 @@ const {
   getBestSellingProducts,
   getPaymentMethodBreakdown,
   getLoyaltyReport,
-  getInventoryReport
+  getInventoryReport,
+  getPurchaseSpend
 } = require('../controllers/reportController');
 const { authenticate, requireAdmin } = require('../middleware/auth');
 
@@ -28,5 +29,8 @@ router.get('/loyalty', authenticate, requireAdmin, getLoyaltyReport);
 
 // GET /api/reports/inventory
 router.get('/inventory', authenticate, requireAdmin, getInventoryReport);
+
+// GET /api/reports/purchase-spend
+router.get('/purchase-spend', authenticate, requireAdmin, getPurchaseSpend);
 
 module.exports = router;
