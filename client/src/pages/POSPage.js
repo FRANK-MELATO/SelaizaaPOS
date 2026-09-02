@@ -200,7 +200,7 @@ function POSPage() {
         payments,
         discount_type: 'fixed',
         discount_value: discountAmount,
-        tax_rate: 15,
+        tax_rate: 0, // VAT removed
         customer_id: selectedCustomer?.id || null,
         points_redeemed: redeemPoints ? pointsToRedeem : 0
       };
@@ -455,10 +455,6 @@ function POSPage() {
                     <span>-{formatCurrency(pointsDiscount)}</span>
                   </div>
                 )}
-                <div className="flex justify-between text-sm text-gray-600 dark:text-gray-400">
-                  <span>VAT (15%)</span>
-                  <span>{formatCurrency(tax)}</span>
-                </div>
                 <div className="flex justify-between font-bold text-lg text-gray-900 dark:text-gray-100 border-t border-gray-200 dark:border-gray-600 pt-1.5 mt-1">
                   <span>Total</span>
                   <span className="text-orange-600 dark:text-orange-400">{formatCurrency(total)}</span>

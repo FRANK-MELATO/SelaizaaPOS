@@ -2,7 +2,10 @@ import React, { createContext, useContext, useState, useCallback, useMemo } from
 
 const CartContext = createContext(null);
 
-const TAX_RATE = 0.15;
+// VAT removed — was 0.15 (15%). Kept as a rate rather than deleting the
+// tax plumbing outright, since sales history/receipts still carry a
+// tax_amount field; this just makes every new sale compute to 0.
+const TAX_RATE = 0;
 
 export function CartProvider({ children }) {
   const [items, setItems] = useState([]);
