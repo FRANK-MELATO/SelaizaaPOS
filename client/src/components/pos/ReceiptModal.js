@@ -7,8 +7,7 @@ const STORE_INFO = {
   name: 'SELAIzaa Products',
   tagline: 'Premium Achaar & More',
   tel: '+266 50410310',
-  address: 'Maseru, Lesotho',
-  taxNumber: 'TAX: LS-VAT-12345'
+  address: 'Maseru, Lesotho'
 };
 
 function ReceiptContent({ sale }) {
@@ -23,7 +22,6 @@ function ReceiptContent({ sale }) {
         <div className="text-xs text-gray-600">{STORE_INFO.tagline}</div>
         <div className="mt-1 text-xs text-gray-600">Tel: {STORE_INFO.tel}</div>
         <div className="text-xs text-gray-600">{STORE_INFO.address}</div>
-        <div className="text-xs text-gray-600">{STORE_INFO.taxNumber}</div>
       </div>
 
       {/* Sale info */}
@@ -86,10 +84,14 @@ function ReceiptContent({ sale }) {
             <span>-{formatCurrency(sale.points_discount)}</span>
           </div>
         )}
-        <div className="flex justify-between">
-          <span>VAT (15%):</span>
-          <span>{formatCurrency(sale.tax_amount)}</span>
-        </div>
+        {sale.tax_amount > 0 && (
+          // VAT was removed going forward — this only shows when reprinting
+          // an older receipt from before the change, where tax was charged.
+          <div className="flex justify-between">
+            <span>VAT:</span>
+            <span>{formatCurrency(sale.tax_amount)}</span>
+          </div>
+        )}
         <div className="flex justify-between font-bold text-base border-t border-gray-400 pt-1 mt-1">
           <span>TOTAL:</span>
           <span>{formatCurrency(sale.total_amount)}</span>

@@ -39,7 +39,7 @@ const createSale = async (req, res, next) => {
       discount_value = 0,
       payments = [],
       points_redeemed = 0,
-      tax_rate = 15,
+      tax_rate = 0, // VAT removed
       notes
     } = req.body;
 
